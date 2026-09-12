@@ -1,0 +1,47 @@
+name: NYC Free Events daily digest
+
+# Runs the scout in GitHub's cloud so it fires whether or not your PC is on.
+on:
+  schedule:
+    # 12:00 UTC = 8 AM ET during EDT (summer) / 7 AM ET during EST (winter).
+    # Plain cron has no timezone, so the local hour shifts by 1 across DST.
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}   # lets you trigger a run by hand from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nyc-free-events
+  cancel-in-progress: false
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Persist seen.json between runs so the daily de-dupe survives the
+      # ephemeral runner. Each run writes a fresh key and restores the newest
+      # previous one via the restore-keys prefix.
+      - name: Restore de-dupe cache
+        uses: actions/cache@v4
+        with:
+          path: seen.json
+          key: seen-${{ github.run_id }}
+          restore-keys: |
+            seen-
+
+      - name: Send digest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python nyc_free_events.py

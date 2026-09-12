@@ -66,6 +66,13 @@ servers **whether or not your PC is on**. No machine to keep awake.
 - **State:** `seen.json` persists across runs via `actions/cache`, so the daily
   de-dupe survives the ephemeral runners.
 
+> **Cloud caveat — NYC Parks:** the NYC Parks RSS feed (`nycgovparks.org`) blocks
+> GitHub's datacenter IPs with a `405`, so it isn't parsed inline when running in
+> the cloud (it works fine when you run locally). The digest degrades gracefully:
+> NYC Parks still appears as tap-through links (the *Outdoors* staple and the
+> *Dig deeper → NYC Parks calendar* link), and the other 8 feeds are unaffected.
+> Run locally via Task Scheduler if you want NYC Parks' ~1,300 events parsed inline.
+
 The AI line uses the **Claude API** (`claude-haiku-4-5`) instead of local Ollama,
 so it works in the cloud. It's read from `ANTHROPIC_API_KEY` and degrades
 gracefully if the key is missing.

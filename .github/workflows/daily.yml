@@ -18,10 +18,12 @@ concurrency:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+    # Gates env-scoped secrets (e.g. ANTHROPIC_API_KEY) to the master branch only.
+    environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
 
@@ -32,7 +34,7 @@ jobs:
       # ephemeral runner. Each run writes a fresh key and restores the newest
       # previous one via the restore-keys prefix.
       - name: Restore de-dupe cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: seen.json
           key: seen-${{ github.run_id }}

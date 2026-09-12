@@ -71,7 +71,10 @@ SEEN_MEMORY = 400
 
 # Networking / fetch.
 FEED_TIMEOUT = 20
-USER_AGENT = "Mozilla/5.0 (nyc-free-events scout; personal use)"
+# Full browser UA — some feeds (e.g. NYC Parks) 405 a terse/bot User-Agent,
+# especially from datacenter IPs like GitHub Actions runners.
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
 # --- Claude "today's move" one-liner (optional) ----------------------------
 # Uses the Anthropic API (Claude Haiku) if ANTHROPIC_API_KEY is set — in the

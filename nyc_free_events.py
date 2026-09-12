@@ -169,7 +169,16 @@ def item_id(feed_name: str, entry) -> str:
 def fetch_feed(feed: dict) -> list:
     """Return parsed entries for one feed, or [] on failure."""
     try:
-        resp = requests.get(feed["url"], headers={"User-Agent": USER_AGENT}, timeout=FEED_TIMEOUT)
+        resp = requests.get(
+            feed["url"],
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.google.com/",
+            },
+            timeout=FEED_TIMEOUT,
+        )
         resp.raise_for_status()
         parsed = feedparser.parse(resp.content)
         return list(parsed.entries)

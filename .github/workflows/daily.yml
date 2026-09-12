@@ -1,6 +1,6 @@
 name: NYC Free Events daily digest
-
 # Runs the scout in GitHub's cloud so it fires whether or not your PC is on.
+
 on:
   schedule:
     # 12:00 UTC = 8 AM ET during EDT (summer) / 7 AM ET during EST (winter).

@@ -196,8 +196,16 @@ def nff_bucket(category: str) -> str:
 
 CATEGORY_LABELS = {key: label for key, label, _ in CATEGORIES}
 
-# Order used when laying out the digest (same as CATEGORIES order).
+# Classification order (first keyword match wins). Keep this as-is.
 CATEGORY_ORDER = [key for key, _, _ in CATEGORIES]
+
+# DISPLAY order for the digest — independent of classification. Leads with the
+# substantive buckets (food, museums, concerts) and pushes the pop-up-/fashion-
+# heavy ones (beauty, brands) to the bottom. Must list every bucket exactly once.
+CATEGORY_DISPLAY_ORDER = [
+    "food", "museums", "concerts", "outdoor", "cultural", "wine", "beauty", "brands",
+]
+assert set(CATEGORY_DISPLAY_ORDER) == set(CATEGORY_ORDER), "display order must cover all buckets"
 
 
 # Pre-compile one regex per category. Each keyword is matched with letter

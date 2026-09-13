@@ -398,7 +398,7 @@ def build_digest(nff_by_cat: dict[str, list[dict]],
     ]
     plain_picks: list[str] = []
 
-    for key in CAT.CATEGORY_ORDER:
+    for key in CAT.CATEGORY_DISPLAY_ORDER:
         label = CAT.CATEGORY_LABELS[key]
         block: list[str] = []
 

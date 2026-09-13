@@ -166,6 +166,34 @@ CATEGORIES = [
     ]),
 ]
 
+# ---------------------------------------------------------------------------
+# NYC For Free EVENTS — the /events page renders ~100 curated FREE events into
+# static HTML (name, category, start/end date + time, venue, link). We parse
+# those directly so the digest shows ACTUAL events, not just a link to the site.
+# This map routes NYC For Free's own category names into our buckets.
+# ---------------------------------------------------------------------------
+
+NFF_EVENTS_URL = "https://www.nycforfree.co/events"
+
+NFF_CAT_MAP = {
+    "Beauty": "beauty", "Wellness": "beauty",
+    "Drink": "wine",
+    "Food": "food",
+    "NYFW": "brands", "Fashion": "brands", "Expo": "brands", "Cars": "brands",
+    "Technology": "brands", "Travel": "brands", "Holiday": "brands", "Floral": "brands",
+    "Music": "concerts",
+    "Museum": "museums", "Art": "museums",
+    "Sports/Fitness": "outdoor", "Nature": "outdoor", "Yoga": "outdoor",
+    "Parade": "outdoor", "Pet": "outdoor",
+    # everything else (TV/Movies, Community, Books, Party/Festival,
+    # Performance/Dance, Culture, Kids, Other, ...) falls through to cultural
+}
+
+
+def nff_bucket(category: str) -> str:
+    return NFF_CAT_MAP.get(category.strip(), "cultural")
+
+
 CATEGORY_LABELS = {key: label for key, label, _ in CATEGORIES}
 
 # Order used when laying out the digest (same as CATEGORIES order).

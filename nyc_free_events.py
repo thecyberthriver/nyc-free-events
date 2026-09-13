@@ -63,8 +63,9 @@ for _stream in (sys.stdout, sys.stderr):
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "CHANGE-ME:paste-token-from-BotFather")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "CHANGE-ME-chat-id")
 
-# How many live feed picks to show per category (before falling back to staples).
-PICKS_PER_CATEGORY = 3
+# How many events to show per category (real NYC For Free events first, then
+# blog-feed items to top up a thin category).
+PICKS_PER_CATEGORY = 4
 
 # How many total feed items to keep in memory as "already sent" (rolling window).
 SEEN_MEMORY = 400
@@ -154,6 +155,97 @@ def clean(text: str) -> str:
     """Strip HTML tags/entities and collapse whitespace from feed text."""
     text = html.unescape(_TAG_RE.sub(" ", text or ""))
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _nff_date(s: str):
+    try:
+        return datetime.strptime(s.strip(), "%B %d, %Y").date()
+    except (ValueError, AttributeError):
+        return None
+
+
+def _short_venue(address: str) -> str:
+    """Shorten a full address to a venue name or neighborhood (<= ~34 chars)."""
+    if not address:
+        return ""
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if not parts:
+        return ""
+    first = parts[0]
+    # If the first segment is a street number, prefer a named 2nd segment.
+    if re.match(r"^\d", first) and len(parts) > 1:
+        first = f"{first}, {parts[1]}" if len(first) < 6 else parts[1]
+    return first[:34]
+
+
+def fetch_nycforfree_events() -> list[dict]:
+    """Parse the NYC For Free /events page (static Webflow HTML) into structured
+    FREE events, keep those on now or upcoming, and tag each with our bucket."""
+    try:
+        resp = requests.get(
+            CAT.NFF_EVENTS_URL,
+            headers={"User-Agent": USER_AGENT,
+                     "Accept": "text/html,application/xhtml+xml,*/*",
+                     "Accept-Language": "en-US,en;q=0.9"},
+            timeout=FEED_TIMEOUT,
+        )
+        resp.raise_for_status()
+        h = resp.text
+    except Exception as e:  # noqa: BLE001
+        log(f"WARN NYC For Free events fetch failed: {e}")
+        return []
+
+    today = date.today()
+    out: list[dict] = []
+    seen_names: set[str] = set()
+    for m in re.finditer(r'<a href="(/events/[^"]+)" class="events_list-card', h):
+        a = m.start()
+        pre = h[max(0, a - 700):a]          # wrapper custom attrs sit before the anchor
+        post = h[a:a + 1100]                # name / description sit after it
+
+        def _at(name: str) -> str:
+            mm = re.search(name + r'="([^"]*)"', pre)
+            return html.unescape(mm.group(1)).strip() if mm else ""
+
+        nm = re.search(r'event-data="name"[^>]*>(.*?)</div>', post)
+        name = clean(nm.group(1)) if nm else ""
+        if not name or name.lower() in seen_names:
+            continue
+        end = _nff_date(_at("end-date"))
+        if end and end < today:             # already over
+            continue
+        seen_names.add(name.lower())
+        dm = re.search(r'event-data="description"[^>]*>(.*?)</div>', post)
+        out.append({
+            "name": name,
+            "url": "https://www.nycforfree.co" + m.group(1),
+            "bucket": CAT.nff_bucket(_at("category")),
+            "start": _nff_date(_at("start-date")),
+            "end": end,
+            "start_time": _at("start-time"),
+            "end_time": _at("end-time"),
+            "venue": _short_venue(_at("address")),
+            "desc": (clean(dm.group(1))[:110] if dm else ""),
+        })
+    out.sort(key=lambda e: e["start"] or today)
+    return out
+
+
+def _fmt_when(e: dict) -> str:
+    """Compact 'when' string for an event: ongoing -> 'thru Sep 26', else date."""
+    today = date.today()
+    s, en = e.get("start"), e.get("end")
+    if s and en and s <= today <= en and s != en:
+        when = f"thru {en.strftime('%b')} {en.day}"
+    elif s:
+        when = f"{s.strftime('%b')} {s.day}"
+    else:
+        when = ""
+    st, et = e.get("start_time", ""), e.get("end_time", "")
+    # Skip placeholder all-day times (e.g. 8:00 AM-8:00 AM) and empty/equal times.
+    if st and et and st != et:
+        when = f"{when} · {st}–{et}" if when else f"{st}–{et}"
+    return when
 
 
 def item_id(feed_name: str, entry) -> str:
@@ -293,11 +385,14 @@ def _price_tag(price: str) -> str:
     return "FREE" if price == "free" else "cheap"
 
 
-def build_digest(by_cat: dict[str, list[dict]]) -> tuple[str, str]:
-    """Return (telegram_html, plain_picks_for_ollama)."""
+def build_digest(nff_by_cat: dict[str, list[dict]],
+                 rss_by_cat: dict[str, list[dict]]) -> tuple[str, str]:
+    """Event-first digest: each category leads with ACTUAL NYC For Free events
+    (name · when · venue), topped up with blog-feed items when thin.
+    Returns (telegram_html, plain_picks_for_the_ai_blurb)."""
     today = date.today()
     lines = [
-        "🗽 <b>Free (&amp; almost-free) NYC — today's picks</b>",
+        "🗽 <b>Free NYC — what's actually on</b>",
         f"📅 {esc(_fmt(today))}",
         "",
     ]
@@ -305,34 +400,44 @@ def build_digest(by_cat: dict[str, list[dict]]) -> tuple[str, str]:
 
     for key in CAT.CATEGORY_ORDER:
         label = CAT.CATEGORY_LABELS[key]
-        picks = by_cat.get(key, [])[:PICKS_PER_CATEGORY]
-        lines.append(f"<b>{esc(label)}</b>")
-        if picks:
-            for p in picks:
-                tag = _price_tag(p["price"])
-                lines.append(
+        block: list[str] = []
+
+        # 1) Real events from NYC For Free — name, when, venue, inline.
+        for e in nff_by_cat.get(key, [])[:PICKS_PER_CATEGORY]:
+            meta = " · ".join(x for x in (_fmt_when(e), e["venue"]) if x)
+            line = f"   • <a href=\"{esc(e['url'])}\">{esc(e['name'])}</a>"
+            if meta:
+                line += f"  <i>{esc(meta)}</i>"
+            block.append(line)
+            plain_picks.append(f"- {e['name']} ({_fmt_when(e)})")
+
+        # 2) Top up a thin category with fresh blog-feed items.
+        need = PICKS_PER_CATEGORY - len(block)
+        if need > 0:
+            for p in rss_by_cat.get(key, [])[:need]:
+                block.append(
                     f"   • <a href=\"{esc(p['link'])}\">{esc(p['title'])}</a>"
-                    f"  <i>[{tag} · {esc(p['source'])}]</i>"
+                    f"  <i>[{_price_tag(p['price'])} · {esc(p['source'])}]</i>"
                 )
-                plain_picks.append(f"- {p['title']} ({tag})")
-        else:
-            # Fall back to an evergreen free staple so the category is never empty.
+
+        # 3) Never leave a category empty.
+        if not block:
             for name, url in CAT.STAPLES.get(key, [])[:1]:
-                lines.append(f"   • <a href=\"{esc(url)}\">{esc(name)}</a>  <i>[always free]</i>")
+                block.append(f"   • <a href=\"{esc(url)}\">{esc(name)}</a>  <i>[browse]</i>")
+
+        lines.append(f"<b>{esc(label)}</b>")
+        lines.extend(block)
         lines.append("")
 
-    lines.append("♾️ <b>Always free — NYC For Free standbys</b>")
-    for label, url in CAT.EVERGREEN:
-        lines.append(f"   • <a href=\"{esc(url)}\">{esc(label)}</a>")
-    lines.append("")
+    lines.append(
+        "🔎 <b>Full listings:</b> "
+        f"<a href=\"{esc(CAT.NFF_EVENTS_URL)}\">NYC For Free</a> · "
+        "<a href=\"https://theskint.com/\">The Skint</a> · "
+        "<a href=\"https://www.clubfreetime.com/new-york-city-nyc/free-events-things-to-do/this-week\">Club Free Time</a>"
+    )
+    lines.append("<i>Events pulled live from NYC For Free — confirm date/time on each link before you go.</i>")
 
-    lines.append("🔎 <b>Dig deeper — live free listings</b>")
-    for label, url in CAT.live_links():
-        lines.append(f"   • <a href=\"{esc(url)}\">{esc(label)}</a>")
-    lines.append("")
-    lines.append("<i>Best-effort free/cheap filter — confirm price &amp; date on each link before you go.</i>")
-
-    return "\n".join(lines), "\n".join(plain_picks[:12])
+    return "\n".join(lines), "\n".join(plain_picks[:14])
 
 
 def insert_blurb(digest_html: str, blurb: str) -> str:
@@ -352,11 +457,16 @@ def insert_blurb(digest_html: str, blurb: str) -> str:
 
 def build(seen: dict) -> tuple[str, list[str]]:
     seen_ids = set(seen.get("sent_ids", []))
-    by_cat, new_ids = collect(seen_ids)
-    total = sum(len(v) for v in by_cat.values())
-    log(f"collected {total} fresh free/cheap items across "
-        f"{sum(1 for v in by_cat.values() if v)} categories")
-    digest, plain = build_digest(by_cat)
+    rss_by_cat, new_ids = collect(seen_ids)
+
+    # Real, structured events straight from the NYC For Free /events page.
+    nff = fetch_nycforfree_events()
+    log(f"NYC For Free: {len(nff)} live events parsed")
+    nff_by_cat: dict[str, list[dict]] = {k: [] for k in CAT.CATEGORY_ORDER}
+    for e in nff:
+        nff_by_cat.setdefault(e["bucket"], []).append(e)
+
+    digest, plain = build_digest(nff_by_cat, rss_by_cat)
     blurb = draft_blurb(plain)
     if blurb:
         digest = insert_blurb(digest, blurb)
